@@ -33,7 +33,7 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=lo
 logger = logging.getLogger(__name__)
 
 # মডেল নির্ধারণ
-TEXT_MODEL  = "gemini-2.0-flash-lite"          # টেক্সটের জন্য — 500 RPD
+TEXT_MODEL  = "gemini-3.1-flash-lite"          # টেক্সটের জন্য — 500 RPD
 MEDIA_MODEL = "gemini-2.5-flash-preview-05-20" # অডিও/ভিডিওর জন্য — উন্নত মান
 
 
