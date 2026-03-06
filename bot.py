@@ -33,8 +33,8 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=lo
 logger = logging.getLogger(__name__)
 
 # মডেল নির্ধারণ
-TEXT_MODEL  = "gemini-2.5-flash-preview-05-20"          # টেক্সটের জন্য — 500 RPD
-MEDIA_MODEL = "gemini-2.5-flash-preview-05-20" # অডিও/ভিডিওর জন্য — উন্নত মান
+TEXT_MODEL  = "gemini-2.5-flash-lite"  # টেক্সটের জন্য — 1000 RPD
+MEDIA_MODEL = "gemini-2.5-flash"       # অডিও/ভিডিওর জন্য — 500 RPD
 
 
 # ==================== KEY রোটেশন ম্যানেজার ====================
@@ -131,8 +131,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ অনুবাদ বট চালু!\n"
         f"🔑 {len(GEMINI_KEYS)}টি API Key সক্রিয়\n\n"
-        "📝 টেক্সট → gemini-2.0-flash-lite (500/দিন)\n"
-        "🎙️ অডিও/ভিডিও → gemini-2.5-flash-preview-05-20 (উন্নত মান)\n\n"
+        "📝 টেক্সট → gemini-2.5-flash-lite (1000/দিন)\n"
+        "🎙️ অডিও/ভিডিও → gemini-2.5-flash (500/দিন)\n\n"
         "যেকোনো টেক্সট, ভয়েস বা ভিডিও পাঠান!"
     )
 
