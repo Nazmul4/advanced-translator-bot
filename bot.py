@@ -1,5 +1,6 @@
 import os
 import logging
+import base64
 import requests
 import tempfile
 import google.generativeai as genai
@@ -10,7 +11,6 @@ from telegram.ext import Application, MessageHandler, CommandHandler, filters, C
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-# ✅ একাধিক Gemini API Key সাপোর্ট
 GEMINI_KEYS = [
     k.strip()
     for k in [
@@ -31,12 +31,11 @@ if not GEMINI_KEYS:
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# মডেল নির্ধারণ
-TEXT_MODEL  = "gemini-2.5-flash-lite"  # টেক্সট — 1000 RPD
-MEDIA_MODEL = "gemini-2.5-flash"       # ইমেজ/অডিও/ভিডিও — 500 RPD
+TEXT_MODEL  = "gemini-3.1-flash-lite-preview"  # টেক্সট — 1000 RPD
+MEDIA_MODEL = "gemini-2.5-flash"              # ইমেজ/অডিও/ভিডিও — 20 RPD
 
 
-# ==================== KEY রোটেশন ম্যানেজার ====================
+# ==================== KEY রোটেশন ====================
 
 class GeminiKeyManager:
     def __init__(self, keys):
@@ -61,7 +60,7 @@ class GeminiKeyManager:
 key_manager = GeminiKeyManager(GEMINI_KEYS)
 
 
-def call_gemini(model_name: str, content) -> str:
+def call_gemini(model_name: str, contents: list) -> str:
     """Quota শেষ হলে আপনাআপনি পরের Key-তে যায়"""
     max_attempts = max(len(GEMINI_KEYS) * 2, 3)
     last_error = None
@@ -71,7 +70,7 @@ def call_gemini(model_name: str, content) -> str:
         try:
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel(model_name)
-            response = model.generate_content(content)
+            response = model.generate_content(contents)
             return response.text.strip()
         except Exception as e:
             last_error = e
@@ -87,69 +86,91 @@ def call_gemini(model_name: str, content) -> str:
 # ==================== অনুবাদ ফাংশন ====================
 
 def translate_text(text: str) -> str:
-    """টেক্সট → বাংলা | gemini-2.5-flash-lite"""
+    """টেক্সট → বাংলা"""
     prompt = (
         "নিচের টেক্সটটি বাংলায় অনুবাদ করো। "
         "শুধু অনুবাদ দাও, কোনো ব্যাখ্যা লিখবে না। "
         "যদি ইতিমধ্যে বাংলায় থাকে তাহলে হুবহু ফেরত দাও।\n\n"
         f"{text}"
     )
-    return call_gemini(TEXT_MODEL, prompt)
+    return call_gemini(TEXT_MODEL, [prompt])
 
 
 def translate_image(file_path: str, caption: str = "") -> str:
-    """ইমেজের টেক্সট পড়ে বাংলায় অনুবাদ | gemini-2.5-flash"""
+    """ইমেজ → বাংলা (সঠিক inline_data format)"""
     try:
         with open(file_path, "rb") as f:
-            image_data = f.read()
+            image_bytes = f.read()
 
-        # ইমেজের ধরন বোঝার জন্য extension চেক
-        ext = file_path.split(".")[-1].lower()
-        mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+        # base64 encode করো
+        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+        # mime type বের করো
+        ext = file_path.rsplit(".", 1)[-1].lower()
+        mime_map = {
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+            "webp": "image/webp",
+            "gif": "image/gif",
+        }
         mime_type = mime_map.get(ext, "image/jpeg")
+
+        # ✅ সঠিক format — inline_data দিয়ে পাঠাও
+        image_part = {
+            "inline_data": {
+                "mime_type": mime_type,
+                "data": image_b64
+            }
+        }
 
         if caption:
             prompt = (
-                f"এই ইমেজে ক্যাপশন আছে: '{caption}'\n\n"
-                "১. ইমেজে যদি কোনো টেক্সট থাকে সেটা বাংলায় অনুবাদ করো।\n"
-                "২. ক্যাপশনটিও বাংলায় অনুবাদ করো।\n"
-                "৩. ইমেজটি সংক্ষেপে বর্ণনা করো।\n\n"
+                f"ক্যাপশন: '{caption}'\n\n"
+                "এই ইমেজ বিশ্লেষণ করো:\n"
+                "১. ইমেজে কোনো লেখা থাকলে বাংলায় অনুবাদ করো\n"
+                "২. ক্যাপশন বাংলায় অনুবাদ করো\n"
+                "৩. ইমেজটি সংক্ষেপে বাংলায় বর্ণনা করো\n\n"
                 "ফরম্যাট:\n"
-                "📝 ইমেজের টেক্সট: [অনুবাদ বা 'কোনো টেক্সট নেই']\n"
+                "📝 ইমেজের লেখা: [অনুবাদ অথবা 'কোনো লেখা নেই']\n"
                 "📌 ক্যাপশন: [অনুবাদ]\n"
                 "🖼️ বর্ণনা: [সংক্ষিপ্ত বর্ণনা]"
             )
         else:
             prompt = (
-                "এই ইমেজটি বিশ্লেষণ করো:\n\n"
-                "১. ইমেজে যদি কোনো টেক্সট/লেখা থাকে সেটা বাংলায় অনুবাদ করো।\n"
-                "২. ইমেজটি সংক্ষেপে বাংলায় বর্ণনা করো।\n\n"
+                "এই ইমেজ বিশ্লেষণ করো:\n"
+                "১. ইমেজে কোনো লেখা/টেক্সট থাকলে বাংলায় অনুবাদ করো\n"
+                "২. ইমেজটি সংক্ষেপে বাংলায় বর্ণনা করো\n\n"
                 "ফরম্যাট:\n"
-                "📝 ইমেজের টেক্সট: [অনুবাদ বা 'কোনো টেক্সট নেই']\n"
+                "📝 ইমেজের লেখা: [অনুবাদ অথবা 'কোনো লেখা নেই']\n"
                 "🖼️ বর্ণনা: [সংক্ষিপ্ত বাংলা বর্ণনা]"
             )
 
-        content = [{"mime_type": mime_type, "data": image_data}, prompt]
-        return call_gemini(MEDIA_MODEL, content)
+        return call_gemini(MEDIA_MODEL, [image_part, prompt])
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
 
 
 def transcribe_and_translate(file_path: str, mime_type: str) -> str:
-    """অডিও/ভিডিও → বাংলা | gemini-2.5-flash"""
+    """অডিও/ভিডিও → বাংলা"""
     try:
         with open(file_path, "rb") as f:
-            file_data = f.read()
+            file_b64 = base64.b64encode(f.read()).decode("utf-8")
 
+        media_part = {
+            "inline_data": {
+                "mime_type": mime_type,
+                "data": file_b64
+            }
+        }
         prompt = (
             "এই অডিও/ভিডিওতে যা বলা হয়েছে তা সম্পূর্ণ বাংলায় অনুবাদ করো।\n\n"
             "ফরম্যাট:\n"
             "মূল ভাষা: [ভাষার নাম]\n\n"
             "বাংলা অনুবাদ:\n[অনুবাদ এখানে]"
         )
-        content = [{"mime_type": mime_type, "data": file_data}, prompt]
-        return call_gemini(MEDIA_MODEL, content)
+        return call_gemini(MEDIA_MODEL, [media_part, prompt])
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -171,11 +192,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔑 {len(GEMINI_KEYS)}টি API Key সক্রিয়\n\n"
         "যা পাঠাতে পারবেন:\n"
         "📝 টেক্সট → বাংলা অনুবাদ\n"
-        "🖼️ ইমেজ → টেক্সট পড়ে বাংলায় অনুবাদ\n"
+        "🖼️ ইমেজ → লেখা পড়ে বাংলায় অনুবাদ + বর্ণনা\n"
         "🎙️ ভয়েস/অডিও → বাংলা অনুবাদ\n"
-        "🎬 ভিডিও → বাংলা অনুবাদ\n\n"
-        "📌 টেক্সট: gemini-2.5-flash-lite\n"
-        "📌 ইমেজ/মিডিয়া: gemini-2.5-flash"
+        "🎬 ভিডিও → বাংলা অনুবাদ"
     )
 
 
@@ -196,50 +215,39 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ইমেজ হ্যান্ডলার"""
+    """সাধারণ ইমেজ (compressed)"""
     message = update.message or update.channel_post
-    if not message:
-        return
-
-    photo = message.photo
-    if not photo:
+    if not message or not message.photo:
         return
 
     status_msg = await message.reply_text("🖼️ ইমেজ বিশ্লেষণ করছি...")
     try:
-        # সবচেয়ে বড় (ভালো মানের) ছবি নাও
-        largest_photo = max(photo, key=lambda p: p.file_size or 0)
-        file = await context.bot.get_file(largest_photo.file_id)
+        largest = max(message.photo, key=lambda p: p.file_size or 0)
+        file = await context.bot.get_file(largest.file_id)
         path = download_file(file.file_path, ".jpg")
-
-        caption = message.caption or ""
-        result = translate_image(path, caption)
+        result = translate_image(path, message.caption or "")
         await status_msg.edit_text(f"🖼️ ইমেজ অনুবাদ:\n\n{result}")
     except Exception as e:
         await status_msg.edit_text(f"❌ ব্যর্থ: {str(e)[:150]}")
 
 
 async def handle_document_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Document হিসেবে পাঠানো ইমেজ হ্যান্ডলার"""
+    """Document হিসেবে পাঠানো ইমেজ (original quality)"""
     message = update.message or update.channel_post
     if not message or not message.document:
         return
 
-    doc = message.document
-    mime = doc.mime_type or ""
-
+    mime = message.document.mime_type or ""
     if not mime.startswith("image/"):
         return
 
     status_msg = await message.reply_text("🖼️ ইমেজ বিশ্লেষণ করছি...")
     try:
-        file = await context.bot.get_file(doc.file_id)
+        file = await context.bot.get_file(message.document.file_id)
         ext_map = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
         suffix = ext_map.get(mime, ".jpg")
         path = download_file(file.file_path, suffix)
-
-        caption = message.caption or ""
-        result = translate_image(path, caption)
+        result = translate_image(path, message.caption or "")
         await status_msg.edit_text(f"🖼️ ইমেজ অনুবাদ:\n\n{result}")
     except Exception as e:
         await status_msg.edit_text(f"❌ ব্যর্থ: {str(e)[:150]}")
