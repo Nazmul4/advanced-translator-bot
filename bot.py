@@ -65,22 +65,41 @@ key_manager = GeminiKeyManager(GEMINI_KEYS)
 
 
 def call_gemini(model_name: str, contents) -> str:
-    max_attempts = max(len(GEMINI_KEYS) * 2, 3)
+    # 503 হলে fallback model ব্যবহার করবে
+    FALLBACK_MODELS = {
+        TEXT_MODEL:  "gemini-2.5-flash",
+        MEDIA_MODEL: "gemini-3.1-flash-lite-preview",
+    }
+
+    models_to_try = [model_name]
+    if model_name in FALLBACK_MODELS:
+        models_to_try.append(FALLBACK_MODELS[model_name])
+
     last_error = None
-    for attempt in range(max_attempts):
-        api_key = key_manager.get_key()
-        try:
-            client = genai.Client(api_key=api_key)
-            response = client.models.generate_content(model=model_name, contents=contents)
-            return response.text.strip()
-        except Exception as e:
-            last_error = e
-            err = str(e)
-            if "429" in err or "quota" in err.lower() or "exhausted" in err.lower():
-                key_manager.mark_failed(api_key)
-                continue
-            raise
-    raise Exception(f"সব Key ব্যর্থ! শেষ ত্রুটি: {last_error}")
+
+    for current_model in models_to_try:
+        max_attempts = max(len(GEMINI_KEYS) * 2, 3)
+        for attempt in range(max_attempts):
+            api_key = key_manager.get_key()
+            try:
+                client = genai.Client(api_key=api_key)
+                response = client.models.generate_content(model=current_model, contents=contents)
+                if current_model != model_name:
+                    logger.info(f"Fallback সফল: {model_name} → {current_model}")
+                return response.text.strip()
+            except Exception as e:
+                last_error = e
+                err = str(e)
+                if "429" in err or "quota" in err.lower() or "exhausted" in err.lower():
+                    key_manager.mark_failed(api_key)
+                    continue
+                elif "503" in err or "unavailable" in err.lower() or "high demand" in err.lower():
+                    logger.warning(f"{current_model} busy (503), fallback চেষ্টা করছি...")
+                    break
+                else:
+                    raise
+
+    raise Exception(f"সব Model ও Key ব্যর্থ! শেষ ত্রুটি: {last_error}")
 
 
 # ==================== অনুবাদ ফাংশন ====================
